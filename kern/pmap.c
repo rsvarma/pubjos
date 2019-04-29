@@ -103,7 +103,13 @@ boot_alloc(uint32_t n)
 	//
 	// LAB 2: Your code here.
 
-	return NULL;
+	result = nextfree;
+	nextfree = ROUNDUP(nextfree+n, PGSIZE);
+	// if out of memory
+	if (PADDR(nextfree) > npages * PGSIZE) {
+		panic("boot_alloc: not enough memory");
+	}
+	return result;
 }
 
 // Set up a two-level page table:
@@ -125,7 +131,7 @@ mem_init(void)
 	i386_detect_memory();
 
 	// Remove this line when you're ready to test this function.
-	panic("mem_init: This function is not finished\n");
+	//panic("mem_init: This function is not finished\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
@@ -148,7 +154,7 @@ mem_init(void)
 	// array.  'npages' is the number of physical pages in memory.  Use memset
 	// to initialize all fields of each struct PageInfo to 0.
 	// Your code goes here:
-
+	pages = boot_alloc(sizeof(struct PageInfo) * npages);
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -234,29 +240,45 @@ mem_init(void)
 void
 page_init(void)
 {
-	// The example code here marks all physical pages as free.
-	// However this is not truly the case.  What memory is free?
 	//  1) Mark physical page 0 as in use.
 	//     This way we preserve the real-mode IDT and BIOS structures
 	//     in case we ever need them.  (Currently we don't, but...)
+	pages[0].pp_link = NULL;
+	pages[0].pp_ref = 1;
+
+
 	//  2) The rest of base memory, [PGSIZE, npages_basemem * PGSIZE)
 	//     is free.
+		size_t i;
+        for (i = 1 ; i < npages_basemem; i++) {
+                pages[i].pp_ref = 0;
+                pages[i].pp_link = page_free_list;
+                page_free_list = &pages[i];
+        }
+
 	//  3) Then comes the IO hole [IOPHYSMEM, EXTPHYSMEM), which must
 	//     never be allocated.
+	//find first free address in extended mem
+	uint32_t first_free = (uint32_t) PADDR(boot_alloc(0));
+	//find index in pages corresponding to this first free address
+	int free_index = first_free / PGSIZE;
+	//mark mem from base memory to first free address as in use
+	for ( i = npages_basemem ; i < free_index; i++) {
+                pages[i].pp_ref = 1;
+                pages[i].pp_link = NULL;
+        }
+
 	//  4) Then extended memory [EXTPHYSMEM, ...).
 	//     Some of it is in use, some is free. Where is the kernel
 	//     in physical memory?  Which pages are already in use for
 	//     page tables and other data structures?
-	//
-	// Change the code to reflect this.
-	// NB: DO NOT actually touch the physical memory corresponding to
-	// free pages!
-	size_t i;
-	for (i = 0; i < npages; i++) {
+	//mark mem from first free address to end of phys mem as free
+	for (i = free_index; i < npages; i++) {
 		pages[i].pp_ref = 0;
 		pages[i].pp_link = page_free_list;
 		page_free_list = &pages[i];
 	}
+
 }
 
 //
@@ -274,8 +296,20 @@ page_init(void)
 struct PageInfo *
 page_alloc(int alloc_flags)
 {
-	// Fill this function in
-	return 0;
+	//if no free memory return null
+	if (!page_free_list) {
+		return NULL;
+	}
+
+	//find first free page from page_free_list and remove it
+	struct PageInfo *first_free_page = page_free_list;
+	page_free_list = first_free_page->pp_link;
+
+	//allocate page to all zeroes if instructed to do so
+	if (alloc_flags && ALLOC_ZERO) {
+		memset(page2kva(first_free_page), 0, PGSIZE);
+	}
+	return first_free_page;
 }
 
 //
@@ -285,9 +319,14 @@ page_alloc(int alloc_flags)
 void
 page_free(struct PageInfo *pp)
 {
-	// Fill this function in
-	// Hint: You may want to panic if pp->pp_ref is nonzero or
-	// pp->pp_link is not NULL.
+	if (pp && (pp->pp_ref == 0)) {
+		//if all is well add pp to page_free_list
+		pp->pp_link = page_free_list;
+		page_free_list = pp;
+	}else{
+		panic("page_free: either pp is null or pp->pp_ref is non-zero");
+	}
+
 }
 
 //
