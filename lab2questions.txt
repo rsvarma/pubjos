@@ -1,0 +1,35 @@
+1.
+    it should be a uintptr_t since the pointer returned from the return_a_pointer() function will correspond
+    to a virtual address.
+2.
+    Entry   Base Virtual Address    Points to (logically)
+    1023    0xffc00000              Page table for top 4MB of phys memory
+    1022    0xff800000              Page table for 4MB right below top 4 MB of phys memory
+    .       .                       .
+    960     0xf0000000              Page table for first 4MB of phys memory
+    959     0xefc00000              Page table for kernel stack 
+    958     0xef800000              Page table for I/O (unmapped)
+    957     0xef400000              Page table for second page of pages array
+    956     0xef000000              Page table for first page of pages array
+    .       .                       Not mapped
+    2       0x00800000              Not mapped
+    1       0x00400000              Not mapped
+    0       0x00000000              Not mapped
+
+3. 
+    This is because the paging tables also have permissions that are set. Since the kernel's pages have the PTE_U
+    bit off user programs will not be able to read these pages and will generate a page fault. These permissions
+    are the mechanisms by which the OS protects kernel memory.
+4. 
+    The maximum is 256 MB. Since KERNBASE is 0xf0000000 and we can only map 256 MB for addresses above this KERNBASE.
+
+5.
+    The overhead comes from three places: the amount of space the pages array takes. The size of the page directory, and the size of all the page tables.
+    The amount of space the pages array takes is equal to sizeof(struct PageInfo) * npages. sizeof(struct PageInfo) is 8 bytes as confirmed by gdb. 
+    Dividing 256 MB by 4KB yields 64000 pages, which then multiplied by 8 yields an overall overhead of 512KB from the pages array. The paging directory takes
+    4 KB and the page tables take 4*1024 = 4096 KB. Thus the total overhead is 512+4+4096=4612 KB. Thus the overhead for managing 256MB of RAM is 4612KB.
+
+6.    
+    We are able to do this because we map the first four megabytes of physical memory to the four megabyte chunks starting at both 0x00000000 and 0xf0000000.
+    Without doing this, as soon as the c code starts we would be trying to run instructions at addresses like 0xf0100000 which would not be point to the right thing
+    without the mapping. 
