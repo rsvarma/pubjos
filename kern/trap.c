@@ -385,11 +385,39 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
+	if(!curenv->env_pgfault_upcall) {
+		// Destroy the environment that caused the fault.
+		cprintf("[%08x] user fault va %08x ip %08x\n",
+				curenv->env_id, fault_va, tf->tf_eip);
+		print_trapframe(tf);
+		env_destroy(curenv);
+	}
+	user_mem_assert(curenv, curenv->env_pgfault_upcall, 1, PTE_U | PTE_P);
+	user_mem_assert(curenv, (void*) UXSTACKTOP - 1, 1, PTE_U | PTE_P | PTE_W);
 
-	// Destroy the environment that caused the fault.
-	cprintf("[%08x] user fault va %08x ip %08x\n",
-		curenv->env_id, fault_va, tf->tf_eip);
-	print_trapframe(tf);
-	env_destroy(curenv);
+	uintptr_t top_addr = UXSTACKTOP;
+	if(tf->tf_esp <= UXSTACKTOP && tf->tf_esp >= (UXSTACKTOP - PGSIZE)) {
+		top_addr = tf->tf_esp - 4;
+	}
+
+	struct UTrapframe utf;
+	utf.utf_eflags = tf->tf_eflags;
+	utf.utf_eip = tf->tf_eip;
+	utf.utf_err = tf->tf_err;
+	utf.utf_esp = tf->tf_esp;
+	utf.utf_fault_va = fault_va;
+	utf.utf_regs = tf->tf_regs;
+
+	struct UTrapframe* push_to = (struct UTrapframe*) top_addr - 1;
+	if((uintptr_t) push_to < USTACKTOP - PGSIZE) {
+		cprintf("[%08x] stack overflow in page fault handler\n",
+				curenv->env_id);
+		env_destroy(curenv);
+	}
+
+	*push_to = utf;
+	curenv->env_tf.tf_eip = (uintptr_t) curenv->env_pgfault_upcall;
+	curenv->env_tf.tf_esp = (uintptr_t) push_to;
+	env_run(curenv);
 }
 
