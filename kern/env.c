@@ -119,6 +119,16 @@ env_init(void)
 {
 	// Set up envs array
 	// LAB 3: Your code here.
+	int i;
+	//for all environments in array
+	for (i = NENV-1; i >=0 ; i--){
+		//mark environment as free with id 0
+		envs[i].env_id= 0;
+		//make head of env_free_
+		envs[i].env_link = env_free_list;
+		env_free_list = envs+i;
+	}
+
 
 	// Per-CPU part of the initialization
 	env_init_percpu();
@@ -182,7 +192,14 @@ env_setup_vm(struct Env *e)
 	//    - The functions in kern/pmap.h are handy.
 
 	// LAB 3: Your code here.
-
+	//get correct kernel virtual address to assign to env_pgdir based on p
+	e->env_pgdir = page2kva(p);
+	//initialize kernel portion, naturally, page directory is of PGSIZE 
+	for(i = PDX(UTOP); i < NPDENTRIES; ++i){
+		e->env_pgdir[i] = kern_pgdir[i]; 
+	}
+	//increment pp_ref as directed
+	p->pp_ref++;
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
 	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
@@ -272,6 +289,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 static void
 region_alloc(struct Env *e, void *va, size_t len)
 {
+	//cprintf("starting region_alloc");
 	// LAB 3: Your code here.
 	// (But only if you need it for load_icode.)
 	//
@@ -279,6 +297,19 @@ region_alloc(struct Env *e, void *va, size_t len)
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
+	//check for edge case that len i s0
+	void *start = ROUNDDOWN(va, PGSIZE);
+	void *end = ROUNDUP(va+len, PGSIZE);
+	for (; start < end; start += PGSIZE) {
+		struct PageInfo *pg = page_alloc(0);
+		//in case alloc fails	
+		if (!pg){
+ 			panic("region_alloc failed!");
+		}
+		page_insert(e->env_pgdir, pg, start, PTE_W | PTE_U);
+	}
+	//cprintf("finished region_alloc");
+
 }
 
 //
@@ -309,13 +340,13 @@ load_icode(struct Env *e, uint8_t *binary)
 	// Hints:
 	//  Load each program segment into virtual memory
 	//  at the address specified in the ELF segment header.
-	//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
-	//  Each segment's virtual address can be found in ph->p_va
-	//  and its size in memory can be found in ph->p_memsz.
-	//  The ph->p_filesz bytes from the ELF binary, starting at
-	//  'binary + ph->p_offset', should be copied to virtual address
-	//  ph->p_va.  Any remaining memory bytes should be cleared to zero.
-	//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
+	//  You should only load segments with first_header->p_type == ELF_PROG_LOAD.
+	//  Each segment's virtual address can be found in first_header->p_va
+	//  and its size in memory can be found in first_header->p_memsz.
+	//  The first_header->p_filesz bytes from the ELF binary, starting at
+	//  'binary + first_header->p_offset', should be copied to virtual address
+	//  first_header->p_va.  Any remaining memory bytes should be cleared to zero.
+	//  (The ELF header should have first_header->p_filesz <= first_header->p_memsz.)
 	//  Use functions from the previous lab to allocate and map pages.
 	//
 	//  All page protection bits should be user read/write for now.
@@ -335,11 +366,43 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
+	struct Elf *elf = (struct Elf *) binary;
+
+	if (elf->e_magic != ELF_MAGIC) {
+		panic("load_icode: invalid ELF format!");
+	}
+
+	// pointer to first program header
+	struct Proghdr *first_header = (struct Proghdr *) ((void *) elf + elf->e_phoff);
+	// pointer to right after last program header
+	struct Proghdr *end = first_header + elf->e_phnum;
+
+	// switch to user page directory to write to alloc'd memory
+	lcr3(PADDR(e->env_pgdir));
+
+	//thx boot.main for this for loop trick
+	for (; first_header < end; first_header++) {
+		if (first_header->p_type == ELF_PROG_LOAD) {
+			//cprintf("va == %p\n", first_header->p_va);
+			region_alloc(e, (void *) first_header->p_va, first_header->p_memsz);
+			//cprintf("after region alloc va == %p\n", first_header->p_va);
+			memset((void*)first_header->p_va, 0, first_header->p_memsz);
+			//cprintf("after memset va = %p\n", first_header->p_va);
+			memcpy((void *) first_header->p_va,(void *) elf + first_header->p_offset, first_header->p_filesz);
+		}
+	}
+
+
+
+
+	// return to kernel page directory
+	lcr3(PADDR(kern_pgdir));
+
+	e->env_tf.tf_eip = elf->e_entry;
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
-
-	// LAB 3: Your code here.
+	region_alloc(e, (void *) (USTACKTOP - PGSIZE), PGSIZE);
 }
 
 //
@@ -353,6 +416,12 @@ void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
+	struct Env *env;
+	if(env_alloc(&env, 0) < 0){
+		panic("couldn't allocate env for first env");
+	}
+	load_icode(env, binary);
+	env->env_type = type;
 }
 
 //
@@ -469,14 +538,23 @@ env_run(struct Env *e)
 	//	   1. Set the current environment (if any) back to
 	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
 	//	      what other states it can be in),
+	if (curenv != NULL){
+		if (curenv->env_status == ENV_RUNNING)
+			curenv->env_status = ENV_RUNNABLE;
+	}
+
 	//	   2. Set 'curenv' to the new environment,
+	curenv = e;
 	//	   3. Set its status to ENV_RUNNING,
+	curenv->env_status = ENV_RUNNING;
 	//	   4. Update its 'env_runs' counter,
+	curenv->env_runs++;
 	//	   5. Use lcr3() to switch to its address space.
+	lcr3(PADDR(e->env_pgdir));
 	// Step 2: Use env_pop_tf() to restore the environment's
 	//	   registers and drop into user mode in the
 	//	   environment.
-
+	env_pop_tf(&curenv->env_tf);
 	// Hint: This function loads the new environment's state from
 	//	e->env_tf.  Go back through the code you wrote above
 	//	and make sure you have set the relevant parts of
@@ -484,6 +562,8 @@ env_run(struct Env *e)
 
 	// LAB 3: Your code here.
 
-	panic("env_run not yet implemented");
+
+
+
 }
 

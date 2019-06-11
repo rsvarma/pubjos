@@ -1,0 +1,21 @@
+1.
+Because we have to deal with different interrupts and exceptions
+in different ways. Without having multiple handlers, its hard to create protection.
+
+2.
+Since the current system is running in user mode, the DPL is 3, but
+the INT instruction as a system instruction with privilege level 0
+so the user cant invoke int $14, triggering trap 13. If the kernel allowed
+softints int $14 instruction to invoke the kernel page fault the user will be 
+able to interfere with memory management, which is bad.
+
+
+3.
+You will get a general protection fault if you try to simply get trap dispatch
+to trap the breakpoint and call the monitor because the dpl of T_BRKPT is at 0
+To get this to work you need to modify trap_init.
+
+4.
+breakpoints are a critical part of any development process, but you have to balance
+such intentions with malicious intentions so I think these mechanism are critical in ensuring
+developers and users get the functionality they need from the kernel without compromising the kernel.
