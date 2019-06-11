@@ -37,7 +37,7 @@ sched_yield(void)
 	// cprintf("cur: %x, thiscpu: %x\n", cur, thiscpu->cpu_id);
 	for (i = 0; i < NENV; ++i) {
 		int j = (cur+i) % NENV;
-		if (j < 2) cprintf("envs[%x].env_status: %x\n", j, envs[j].env_status);
+		//if (j < 2) cprintf("envs[%x].env_status: %x\n", j, envs[j].env_status);
 		if (envs[j].env_status == ENV_RUNNABLE) {
 			if (j == 1) 
 				cprintf("\n");
